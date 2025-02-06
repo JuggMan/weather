@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Weather App with Windy Radar</title>
+  <style>
+    /* Overall page styles */
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #2a2a2a; 
+      font-family: Arial, sans-serif;
+      color: white;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    #searchContainer {
+      position: relative;
+    }
+    #searchBar {
+      width: 300px;
+      padding: 10px 20px 10px 40px;
+      border-radius: 50px;
+      border: none;
+      outline: none;
+      font-size: 16px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    }
+    #searchIcon {
+      position: absolute;
+      left: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+      font-size: 18px;
+    }
+    #searchBar::placeholder {
+      color: #999;
+    }
+
+    .weather-section {
+      width: 90%;
+      max-width: 900px;
+      margin: 20px auto;
+    }
+    .action-buttons {
+      display: flex;
+      flex-direction: row;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .current-weather {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      width: 100%;
+    }
+    .current-temp {
+      font-size: 48px;
+      font-weight: bold;
+    }
+    .location-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    .cityName {
+      font-size: clamp(32px, 8vw, 64px);
+      font-weight: bold;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 5px;
+    }
+    .stateCountryLine {
+      font-size: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #444;
+    }
+    th, td {
+      border: 1px solid #666;
+      padding: 8px;
+      text-align: center;
+    }
+    th {
+      background: #555;
+    }
+    #backButton,
+    #radarToggle {
+      background: #555;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+    #backButton:hover,
+    #radarToggle:hover {
+      background: #666;
+    }
+
+    /* Radar section is just an <iframe> from Windy now */
+    #radarSection {
+      display: none; 
+      margin-bottom: 20px;
+      width: 100%;
+      max-width: 900px;
+      height: 600px; /* a bit taller to fit Windy UI */
+      position: relative;
+    }
+    /* We put the iframe inside it */
+    #windyRadarFrame {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- Initial screen -->
+  <div class="container" id="initialScreen">
+    <div id="searchContainer">
+      <span id="searchIcon">🔍</span>
+      <input type="text" id="searchBar" placeholder="Search for Location" />
+    </div>
+  </div>
+
+  <!-- Weather display screen (hidden by default) -->
+  <div class="weather-section" id="weatherSection" style="display: none;">
+    <div class="action-buttons">
+      <button id="backButton">← Back</button>
+      <button id="radarToggle">Show Radar</button>
+    </div>
+
+    <!-- The new “Windy Radar” section -->
+    <div id="radarSection">
+      <iframe
+        id="windyRadarFrame"
+        src=""
+        title="Radar Forecast"
+      ></iframe>
+    </div>
+
+    <div class="current-weather">
+      <div class="current-temp" id="currentTemp"></div>
+      <div class="location-info" id="locationInfo"></div>
+    </div>
+
+    <table id="weatherTable">
+      <thead>
+        <tr>
+          <th class="date">Date</th>
+          <th class="time">Time</th>
+          <th>Temp (°C)</th>
+          <th>Temp (°F)</th>
+          <th>Wind (kph)</th>
+          <th>Wind (mph)</th>
+          <th>Rain (%)</th>
+          <th>Humidity (%)</th>
+        </tr>
+      </thead>
+      <tbody id="weatherTableBody">
+        <!-- dynamically filled -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const searchBar = document.getElementById('searchBar');
+    const initialScreen = document.getElementById('initialScreen');
+    const weatherSection = document.getElementById('weatherSection');
+    const currentTempElem = document.getElementById('currentTemp');
+    const locationInfoElem = document.getElementById('locationInfo');
+    const weatherTableBody = document.getElementById('weatherTableBody');
+    const backButton = document.getElementById('backButton');
+    const radarToggle = document.getElementById('radarToggle');
+    const radarSection = document.getElementById('radarSection');
+    const windyRadarFrame = document.getElementById('windyRadarFrame');
+
+    let lastLat = null;
+    let lastLon = null;
+    let radarVisible = false;
+
+    // Title-case for state names
+    function toTitleCase(str) {
+      return str.replace(/\w\S*/g, (txt) =>
+        txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()
+      );
+    }
+
+    // On Enter key
+    searchBar.addEventListener('keyup', (e) => {
+      if (e.key === 'Enter') {
+        const query = searchBar.value.trim();
+        if (query) {
+          searchLocation(query);
+        }
+      }
+    });
+
+    // Back button
+    backButton.addEventListener('click', () => {
+      weatherSection.style.display = 'none';
+      initialScreen.style.display = 'flex';
+      searchBar.value = '';
+
+      // Hide radar
+      radarSection.style.display = 'none';
+      radarToggle.textContent = 'Show Radar';
+      radarVisible = false;
+    });
+
+    // Show/Hide Radar
+    radarToggle.addEventListener('click', () => {
+      if (!lastLat || !lastLon) return;
+      if (!radarVisible) {
+        // Show it
+        radarSection.style.display = 'block';
+        radarToggle.textContent = 'Hide Radar';
+        radarVisible = true;
+
+        // Build a Windy embed URL with lat/lon, focusing on the Radar overlay
+        // Check https://www.windy.com/-Embed-widget-on-page for docs
+        // This will let user see precipitation data, including some future forecast frames
+        const zoom = 7; 
+        // overlay=radar means "Radar" layer, product=radar
+        // Some Windy parameters:
+        // - lat & lon for center
+        // - detailLat & detailLon for the "weather station" detail if user clicks
+        // - marker=true to place a marker at that lat/lon
+        const windyUrl = `https://embed.windy.com/embed2.html?` +
+          `lat=${lastLat}&lon=${lastLon}&detailLat=${lastLat}&detailLon=${lastLon}` +
+          `&zoom=${zoom}&level=surface&overlay=radar&product=radar&menu=&message=true` +
+          `&marker=true&type=map&location=coordinates&metricWind=default&metricTemp=default`;
+
+        windyRadarFrame.src = windyUrl;
+      } else {
+        // Hide it
+        radarSection.style.display = 'none';
+        radarToggle.textContent = 'Show Radar';
+        radarVisible = false;
+      }
+    });
+
+    // Searching a location (US only)
+    async function searchLocation(query) {
+      try {
+        const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?count=10&country=US&name=${encodeURIComponent(query)}`;
+        const geoResponse = await fetch(geoUrl);
+        const geoData = await geoResponse.json();
+
+        if (!geoData.results || geoData.results.length === 0) {
+          alert('Location not found in US.');
+          return;
+        }
+
+        const location = geoData.results[0];
+        lastLat = location.latitude;
+        lastLon = location.longitude;
+
+        const cityName = (location.name || '').toUpperCase();
+        const stateName = location.admin1 ? toTitleCase(location.admin1) : '';
+        const countryCode = location.country_code
+          ? location.country_code.toLowerCase()
+          : '';
+
+        locationInfoElem.innerHTML = `
+          <span class="cityName">${cityName}</span>
+          <span class="stateCountryLine">${stateName} ${countryCode}</span>
+        `;
+
+        getWeather(lastLat, lastLon);
+      } catch (error) {
+        console.error(error);
+        alert('Error fetching location data.');
+      }
+    }
+
+    // Fetch weather data
+    async function getWeather(latitude, longitude) {
+      try {
+        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&hourly=temperature_2m,relativehumidity_2m,precipitation_probability,windspeed_10m&current_weather=true&timezone=auto`;
+        const weatherResponse = await fetch(weatherUrl);
+        const weatherData = await weatherResponse.json();
+
+        // Show current weather
+        const currentWeather = weatherData.current_weather;
+        const tempC = currentWeather.temperature;
+        const tempF = (tempC * 9) / 5 + 32;
+        currentTempElem.textContent = `${tempC.toFixed(1)}°C / ${tempF.toFixed(1)}°F`;
+
+        // Build the hour-by-hour table
+        weatherTableBody.innerHTML = '';
+
+        const times = weatherData.hourly.time;
+        const temps = weatherData.hourly.temperature_2m;
+        const humidities = weatherData.hourly.relativehumidity_2m;
+        const rainProbs = weatherData.hourly.precipitation_probability;
+        const windKph = weatherData.hourly.windspeed_10m;
+
+        const now = new Date();
+        let currentIndex = times.findIndex((timeStr) => {
+          const t = new Date(timeStr);
+          return t >= now;
+        });
+        if (currentIndex === -1) currentIndex = 0;
+
+        for (let i = currentIndex; i < times.length; i++) {
+          const row = document.createElement('tr');
+          const timeObj = new Date(times[i]);
+
+          const dateStr = timeObj.toLocaleDateString();
+          const hourStr = timeObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+          const dateCell = document.createElement('td');
+          dateCell.textContent = dateStr;
+          row.appendChild(dateCell);
+
+          const timeCell = document.createElement('td');
+          timeCell.textContent = hourStr;
+          row.appendChild(timeCell);
+
+          const tempCell = document.createElement('td');
+          tempCell.textContent = temps[i].toFixed(1);
+          row.appendChild(tempCell);
+
+          const tempFCell = document.createElement('td');
+          tempFCell.textContent = (temps[i] * 9 / 5 + 32).toFixed(1);
+          row.appendChild(tempFCell);
+
+          const windKphCell = document.createElement('td');
+          windKphCell.textContent = windKph[i].toFixed(1);
+          row.appendChild(windKphCell);
+
+          const windMphCell = document.createElement('td');
+          const mph = windKph[i] * 0.621371;
+          windMphCell.textContent = mph.toFixed(1);
+          row.appendChild(windMphCell);
+
+          const rainCell = document.createElement('td');
+          rainCell.textContent = rainProbs[i];
+          row.appendChild(rainCell);
+
+          const humidityCell = document.createElement('td');
+          humidityCell.textContent = humidities[i];
+          row.appendChild(humidityCell);
+
+          weatherTableBody.appendChild(row);
+        }
+
+        // Switch to weather screen
+        initialScreen.style.display = 'none';
+        weatherSection.style.display = 'block';
+
+        // Hide radar if it was open
+        radarSection.style.display = 'none';
+        radarToggle.textContent = 'Show Radar';
+        radarVisible = false;
+      } catch (error) {
+        console.error(error);
+        alert('Error fetching weather data.');
+      }
+    }
+  </script>
+</body>
+</html>
